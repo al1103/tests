@@ -31,7 +31,20 @@
         color:var(--ink); -webkit-font-smoothing:antialiased; min-height:100vh;
       }
       .wrap{max-width:1180px;margin:0 auto;padding:10px 12px 14px;display:flex;flex-direction:column;gap:8px;min-height:100vh}
-      .wrap:fullscreen{background:#03061c;padding:10px 12px;overflow:auto}
+      .wrap:fullscreen{background:#02040f;padding:0;overflow:hidden}
+      /* Fullscreen = ONLY the instruments: hide every piece of UI chrome. */
+      .wrap:fullscreen .topbar,.wrap:fullscreen .controls,.wrap:fullscreen .edit-bar,
+      .wrap:fullscreen .hud,.wrap:fullscreen .extra-panels,.wrap:fullscreen .status,
+      .wrap:fullscreen .tray,.wrap:fullscreen .stage-foot{display:none!important}
+      .wrap:fullscreen .stage-shell{flex:1;padding:0;border:0;border-radius:0;background:none;box-shadow:none;min-height:0}
+      .wrap:fullscreen .stage{border-radius:0}
+      /* Tiny floating exit button: only while fullscreen, fades in on pointer
+         activity and auto-hides again after ~2s (see pokeFsUI). */
+      .fs-exit{display:none;position:fixed;top:12px;right:12px;z-index:60;font-family:inherit;font-weight:800;font-size:12.5px;cursor:pointer;
+        border-radius:999px;padding:8px 14px;border:1.5px solid rgba(120,240,255,.6);background:rgba(2,10,36,.72);color:#dffbff;
+        opacity:0;pointer-events:none;transition:opacity .3s}
+      .wrap:fullscreen .fs-exit{display:block}
+      .wrap:fullscreen.fs-ui .fs-exit{opacity:.92;pointer-events:auto}
       .topbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
       .app-title{font-family:"Archivo",sans-serif;font-weight:900;font-size:20px;color:#fff;letter-spacing:.02em;margin-right:4px;white-space:nowrap}
       .app-title span{color:var(--cyan)}
@@ -235,6 +248,7 @@
   </head>
   <body>
     <div class="wrap" id="appWrap">
+      <button class="fs-exit" id="btnFsExit" type="button">✕ Thoát toàn màn hình</button>
       <div class="topbar">
         <span class="app-title">Air <span>Drums</span></span>
         <button class="btn btn-primary" id="btnCam" type="button">▶ Bật camera</button>
@@ -254,7 +268,7 @@
 
       <div class="controls">
         <label class="slider">Âm lượng <input type="range" id="vol" min="0" max="100" value="85" /><output id="volOut">85%</output></label>
-        <label class="slider">Độ nhạy <input type="range" id="sens" min="1" max="10" value="6" /><output id="sensOut">6/10</output></label>
+        <label class="slider">Độ nhạy <input type="range" id="sens" min="1" max="10" value="7" /><output id="sensOut">7/10</output></label>
         <label class="slider">Độ tối cam <input type="range" id="tint" min="0" max="70" value="30" /><output id="tintOut">30%</output></label>
         <span style="flex:1"></span>
         <span id="fsMsg" style="font-size:12.5px;color:#ffc44d"></span>
@@ -539,7 +553,7 @@
       var volEl=document.getElementById("vol"), volOut=document.getElementById("volOut");
       volEl.addEventListener("input",function(){volume=volEl.value/100; volOut.textContent=volEl.value+"%"; if(master) master.gain.value=volume; scheduleSave();});
       var sensEl=document.getElementById("sens"), sensOut=document.getElementById("sensOut"), velocityThreshold=1.05;
-      function applySens(){sensOut.textContent=sensEl.value+"/10"; velocityThreshold=1.9-(sensEl.value-1)*0.17;}
+      function applySens(){sensOut.textContent=sensEl.value+"/10"; velocityThreshold=1.6-(sensEl.value-1)*0.14;}
       sensEl.addEventListener("input",function(){applySens(); scheduleSave();}); applySens();
 
       /* View mode: AR (live room behind the kit) vs neon stage */
@@ -595,7 +609,15 @@
 
       /* Camera + fist tracking */
       var cameraOn=false,stream=null,hands=null,rafId=null,sending=false,btnCam=document.getElementById("btnCam");
-      var handState={Left:{prevY:null,prevT:0,vy:0,armed:true,cooldownUntil:0,hitY:0,seen:false,fist:false},Right:{prevY:null,prevT:0,vy:0,armed:true,cooldownUntil:0,hitY:0,seen:false,fist:false}};
+      var handState={Left:{prevY:null,prevT:0,vy:0,vx:0,prevTipX:null,prevTipY:null,armed:true,cooldownUntil:0,hitY:0,seen:false,fist:false},Right:{prevY:null,prevT:0,vy:0,vx:0,prevTipX:null,prevTipY:null,armed:true,cooldownUntil:0,hitY:0,seen:false,fist:false}};
+      /* Segment vs rect test (rect = {left,right,top,bottom}) so a very fast
+         strike that crosses a pad between two frames still registers. */
+      function segHitsRect(x1,y1,x2,y2,r){
+        function inside(x,y){return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;}
+        if(inside(x1,y1)||inside(x2,y2)) return true;
+        function segInt(ax,ay,bx,by,cx,cy,dx,dy){var den=(bx-ax)*(dy-cy)-(by-ay)*(dx-cx); if(den===0) return false; var t=((cx-ax)*(dy-cy)-(cy-ay)*(dx-cx))/den, u=((cx-ax)*(by-ay)-(cy-ay)*(bx-ax))/den; return t>=0&&t<=1&&u>=0&&u<=1;}
+        return segInt(x1,y1,x2,y2,r.left,r.top,r.right,r.top)||segInt(x1,y1,x2,y2,r.right,r.top,r.right,r.bottom)||segInt(x1,y1,x2,y2,r.right,r.bottom,r.left,r.bottom)||segInt(x1,y1,x2,y2,r.left,r.bottom,r.left,r.top);
+      }
       function dist(a,b){var dx=a.x-b.x,dy=a.y-b.y;return Math.sqrt(dx*dx+dy*dy);}
       function isFist(lm){var palm=lm[9],scale=dist(lm[0],lm[9])||0.0001,tips=[8,12,16,20],pips=[6,10,14,18],curled=0;for(var i=0;i<4;i++){var tipD=dist(lm[tips[i]],palm),pipD=dist(lm[pips[i]],lm[0]); if(tipD<scale*1.25||tipD<pipD*0.92)curled++;} return curled>=3;}
       function fistCentre(lm){var idx=[0,5,9,13,17],x=0,y=0; idx.forEach(function(i){x+=lm[i].x;y+=lm[i].y;}); return {x:x/idx.length,y:y/idx.length};}
@@ -623,30 +645,50 @@
             var lm=res.multiHandLandmarks[h], rawLabel=res.multiHandedness[h].label, label=rawLabel==="Left"?"Right":"Left";
             seenNow[label]=true; var st=handState[label]; st.seen=true; var fist=isFist(lm); st.fist=fist; var c=fistCentre(lm);
             var cp=mapPoint(c.x,c.y,W,H), cx=cp.x, cy=cp.y, now=performance.now();
-            var sy=cy/H; /* fist height in displayed (screen) space */
-            if(st.prevY!=null&&now>st.prevT){var instVy=((sy-st.prevY)/((now-st.prevT)/1000)); st.vy=st.vy*0.45+instVy*0.55;}
+            /* Drumstick: grip at the fist, shaft pointing FORWARD (down-screen,
+               toward the kit in front of the player), leaning with the
+               wrist->knuckle direction. Length ~1.4x hand size. The glowing
+               cyan TIP — not the fist — is the hit point for everything. */
+            var wp=mapPoint(lm[0].x,lm[0].y,W,H), mp=mapPoint(lm[9].x,lm[9].y,W,H), tp12=mapPoint(lm[12].x,lm[12].y,W,H);
+            var palmLen=Math.max(24,Math.hypot(mp.x-wp.x,mp.y-wp.y));
+            var handSize=Math.max(palmLen*1.9,Math.hypot(tp12.x-wp.x,tp12.y-wp.y));
+            var stickLen=Math.max(H*0.10,Math.min(H*0.36,handSize*1.4));
+            var lean=Math.max(-0.55,Math.min(0.55,(mp.x-wp.x)/palmLen))*0.5;
+            var dl=Math.hypot(lean,1), dirX=lean/dl, dirY=1/dl;
+            var tipX=cx+dirX*stickLen, tipY=cy+dirY*stickLen;
+            var sy=tipY/H; /* STICK TIP height in displayed (screen) space */
+            if(st.prevY!=null&&st.prevTipX!=null&&now>st.prevT){var dt=(now-st.prevT)/1000; var instVy=((sy-st.prevY)/dt); st.vy=st.vy*0.45+instVy*0.55; var instVx=((tipX-st.prevTipX)/dt); st.vx=st.vx*0.45+instVx*0.55;}
             st.prevY=sy; st.prevT=now;
-            if(!st.armed&&(st.vy<-0.35||sy<st.hitY-0.045)) st.armed=true;
-            var tipX=cx, tipY=cy+H*0.17;
+            if(!st.armed&&(st.vy<0.05||sy<st.hitY-0.028)) st.armed=true;
             ctx2d.fillStyle=fist?"#7df6ff":"rgba(220,245,255,.7)";
             for(var p=0;p<lm.length;p++){var pp=mapPoint(lm[p].x,lm[p].y,W,H); ctx2d.beginPath();ctx2d.arc(pp.x,pp.y,fist?3.4:2.4,0,Math.PI*2);ctx2d.fill();}
-            // black drumstick with glowing cyan tip following the fist
+            // black drumstick held at the fist, pointing forward to its cyan tip
+            var buttX=cx-dirX*stickLen*0.16, buttY=cy-dirY*stickLen*0.16;
             ctx2d.save(); ctx2d.shadowColor="rgba(56,242,255,.9)"; ctx2d.shadowBlur=fist?16:6;
-            ctx2d.strokeStyle="#050505"; ctx2d.lineWidth=Math.max(9,W*0.011); ctx2d.lineCap="round"; ctx2d.beginPath(); ctx2d.moveTo(cx,cy); ctx2d.lineTo(tipX,tipY); ctx2d.stroke();
-            ctx2d.strokeStyle="#2e2e2e"; ctx2d.lineWidth=Math.max(4,W*0.005); ctx2d.beginPath(); ctx2d.moveTo(cx,cy); ctx2d.lineTo(tipX,tipY); ctx2d.stroke();
+            ctx2d.strokeStyle="#050505"; ctx2d.lineWidth=Math.max(9,W*0.011); ctx2d.lineCap="round"; ctx2d.beginPath(); ctx2d.moveTo(buttX,buttY); ctx2d.lineTo(tipX,tipY); ctx2d.stroke();
+            ctx2d.strokeStyle="#2e2e2e"; ctx2d.lineWidth=Math.max(4,W*0.005); ctx2d.beginPath(); ctx2d.moveTo(buttX,buttY); ctx2d.lineTo(tipX,tipY); ctx2d.stroke();
             ctx2d.fillStyle=fist?"#38f2ff":"rgba(56,242,255,.55)"; ctx2d.beginPath(); ctx2d.arc(tipX,tipY,Math.max(7,W*0.010),0,Math.PI*2); ctx2d.fill(); ctx2d.restore();
             ctx2d.fillStyle=fist?"#38f2ff":"rgba(200,230,255,.6)"; ctx2d.beginPath(); ctx2d.arc(cx,cy,Math.max(8,W*0.012),0,Math.PI*2); ctx2d.fill();
             ctx2d.font="700 "+Math.max(12,W*0.016)+"px 'Be Vietnam Pro', sans-serif"; ctx2d.fillStyle="#eafcff"; ctx2d.textAlign="center"; ctx2d.fillText(fist?"ĐANG NẮM":"ĐANG MỞ",cx,cy-Math.max(16,H*0.035));
             if(fist&&st.armed&&now>st.cooldownUntil&&st.vy>velocityThreshold){
               if(!stageRectCache) refreshRectCache();
-              var sr=stageRectCache||{width:canvas.width,height:canvas.height}, ratioX=sr.width/canvas.width, ratioY=sr.height/canvas.height, px=tipX*ratioX, py=tipY*ratioY, hitId=null;
-              Object.keys(padEls).forEach(function(id){ if(!isActive(id))return; var cr=padRectCache[id]; if(!cr)return; if(px>=cr.left&&px<=cr.left+cr.width&&py>=cr.top&&py<=cr.top+cr.height)hitId=id; });
-              if(hitId){var vel=0.3+Math.min(1,(st.vy-velocityThreshold)/2.6)*0.7; strike(hitId,vel); st.armed=false; st.cooldownUntil=now+180; st.hitY=sy; st.vy=0;}
-              else { registerMiss(); st.armed=false; st.cooldownUntil=now+180; st.hitY=sy; st.vy=0; }
+              var sr=stageRectCache||{width:canvas.width,height:canvas.height}, ratioX=sr.width/canvas.width, ratioY=sr.height/canvas.height;
+              /* Motion prediction (~40ms ahead) + segment test: the swept path
+                 of the stick tip, not just its current point, hits the pad. */
+              var px=(tipX+st.vx*0.04)*ratioX, py=(tipY+st.vy*H*0.04)*ratioY;
+              var qx=(st.prevTipX!=null?st.prevTipX:tipX)*ratioX, qy=(st.prevTipY!=null?st.prevTipY:tipY)*ratioY;
+              var hitId=null;
+              Object.keys(padEls).forEach(function(id){ if(hitId||!isActive(id))return; var cr=padRectCache[id]; if(!cr)return;
+                /* camera strikes get a ~30% larger zone than the visual pad */
+                var zr={left:cr.left-cr.width*0.15,right:cr.left+cr.width*1.15,top:cr.top-cr.height*0.15,bottom:cr.top+cr.height*1.15};
+                if(segHitsRect(qx,qy,px,py,zr)) hitId=id; });
+              if(hitId){var vel=0.3+Math.min(1,(st.vy-velocityThreshold)/2.6)*0.7; strike(hitId,vel); st.armed=false; st.cooldownUntil=now+100; st.hitY=sy; st.vy=0; st.vx=0;}
+              else { registerMiss(); st.armed=false; st.cooldownUntil=now+100; st.hitY=sy; st.vy=0; st.vx=0; }
             }
+            st.prevTipX=tipX; st.prevTipY=tipY;
           }
         }
-        ["Left","Right"].forEach(function(side){var chip=side==="Left"?chipL:chipR,name=side==="Left"?"Tay trái:":"Tay phải:"; if(!seenNow[side]){handState[side].seen=false;handState[side].prevY=null;handState[side].vy=0; if(cameraOn)setChip(chip,"warn",name,"chưa thấy tay");}else{setChip(chip,handState[side].fist?"ok":"warn",name,handState[side].fist?"đang nắm ✊":"đang mở — hãy nắm lại");}});
+        ["Left","Right"].forEach(function(side){var chip=side==="Left"?chipL:chipR,name=side==="Left"?"Tay trái:":"Tay phải:"; if(!seenNow[side]){handState[side].seen=false;handState[side].prevY=null;handState[side].vy=0;handState[side].vx=0;handState[side].prevTipX=null;handState[side].prevTipY=null; if(cameraOn)setChip(chip,"warn",name,"chưa thấy tay");}else{setChip(chip,handState[side].fist?"ok":"warn",name,handState[side].fist?"đang nắm ✊":"đang mở — hãy nắm lại");}});
       }
       function frameLoop(){if(!cameraOn)return; if(!sending&&video.readyState>=2&&hands){sending=true; hands.send({image:video}).catch(function(){sending=false;});} rafId=requestAnimationFrame(frameLoop);}
       var handsLibPromise=null;
@@ -665,9 +707,9 @@
       function doStartCamera(){
         if(typeof Hands==="undefined"){setChip(chipCam,"warn","Camera:","không tải được thư viện nhận diện tay — kiểm tra mạng rồi thử lại");return;}
         setChip(chipCam,"warn","Camera:","đang xin quyền…");
-        navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720},facingMode:"user"},audio:false})
+        navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480},frameRate:{ideal:60},facingMode:"user"},audio:false})
           .then(function(s){stream=s; video.srcObject=s; return video.play();})
-          .then(function(){hands=new Hands({locateFile:function(f){return "https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/"+f;}}); hands.setOptions({maxNumHands:2,modelComplexity:0,minDetectionConfidence:0.55,minTrackingConfidence:0.45}); hands.onResults(onResults); cameraOn=true; if(editMode)setEditMode(false); stopDemo(); stage.classList.add("live"); sizeCanvas(); stageTagText.textContent=viewMode==="ar"?"Camera · AR":"Camera · Neon"; btnCam.textContent="■ Tắt camera"; btnCam.classList.add("on"); setChip(chipCam,"ok","Camera:","đang bật"); frameLoop();})
+          .then(function(){hands=new Hands({locateFile:function(f){return "https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/"+f;}}); hands.setOptions({maxNumHands:2,modelComplexity:0,minDetectionConfidence:0.5,minTrackingConfidence:0.4}); hands.onResults(onResults); cameraOn=true; if(editMode)setEditMode(false); stopDemo(); stage.classList.add("live"); sizeCanvas(); stageTagText.textContent=viewMode==="ar"?"Camera · AR":"Camera · Neon"; btnCam.textContent="■ Tắt camera"; btnCam.classList.add("on"); setChip(chipCam,"ok","Camera:","đang bật"); frameLoop();})
           .catch(function(err){setChip(chipCam,"warn","Camera:","không bật được ("+(err&&err.name?err.name:"lỗi")+") — hãy dùng Demo hoặc chạm pad"); stageTagText.textContent="Không bật được camera";});
       }
       function stopCamera(updateBtn){cameraOn=false; if(rafId)cancelAnimationFrame(rafId); if(stream){stream.getTracks().forEach(function(t){t.stop();}); stream=null;} if(hands&&hands.close){try{hands.close();}catch(e){} hands=null;} video.srcObject=null; stage.classList.remove("live"); ctx2d&&ctx2d.clearRect(0,0,canvas.width,canvas.height); if(updateBtn!==false){btnCam.textContent="▶ Bật camera"; btnCam.classList.remove("on"); if(!demoOn){stageTagText.textContent="Chưa bật camera"; setChip(chipCam,"","Camera:","chưa bật"); setChip(chipL,"","Tay trái:","—"); setChip(chipR,"","Tay phải:","—");}}}
@@ -685,7 +727,7 @@
       function resetSettingsToDefaults(){
         try{
           document.getElementById("vol").value=85; document.getElementById("vol").dispatchEvent(new Event("input"));
-          document.getElementById("sens").value=6; document.getElementById("sens").dispatchEvent(new Event("input"));
+          document.getElementById("sens").value=7; document.getElementById("sens").dispatchEvent(new Event("input"));
           document.getElementById("tint").value=30; document.getElementById("tint").dispatchEvent(new Event("input"));
           var b=document.getElementById("bpm"); if(b){b.value=100; b.dispatchEvent(new Event("input"));}
           setAngle(14); setViewMode("ar");
@@ -809,9 +851,19 @@
       if(btnRec) btnRec.addEventListener("click",function(){ recOn?stopRec():startRec(); });
 
 
-      /* Fullscreen */
-      var btnFs=document.getElementById("btnFullscreen"), fsMsg=document.getElementById("fsMsg"), appWrap=document.getElementById("appWrap");
-      function syncFsLabel(){ if(btnFs) btnFs.textContent=document.fullscreenElement?"⛶ Thoát toàn màn hình":"⛶ Toàn màn hình"; setTimeout(function(){sizeCanvas(); refreshRectCache();},80); }
+      /* Fullscreen — in fullscreen every UI element is hidden (CSS :fullscreen
+         rules); only this tiny floating exit button remains, shown on pointer
+         activity and auto-hidden after ~2s idle. */
+      var btnFs=document.getElementById("btnFullscreen"), fsMsg=document.getElementById("fsMsg"), appWrap=document.getElementById("appWrap"), btnFsExit=document.getElementById("btnFsExit"), _fsUiTimer=null;
+      function pokeFsUI(){
+        if(!document.fullscreenElement) return;
+        appWrap.classList.add("fs-ui");
+        if(_fsUiTimer) clearTimeout(_fsUiTimer);
+        _fsUiTimer=setTimeout(function(){ appWrap.classList.remove("fs-ui"); },2000);
+      }
+      ["pointermove","pointerdown","touchstart"].forEach(function(ev){ appWrap.addEventListener(ev,pokeFsUI,{passive:true}); });
+      if(btnFsExit){ btnFsExit.addEventListener("click",function(){ if(document.fullscreenElement) document.exitFullscreen().catch(function(){}); }); }
+      function syncFsLabel(){ if(btnFs) btnFs.textContent=document.fullscreenElement?"⛶ Thoát toàn màn hình":"⛶ Toàn màn hình"; if(document.fullscreenElement){ pokeFsUI(); } else { appWrap.classList.remove("fs-ui"); if(_fsUiTimer) clearTimeout(_fsUiTimer); } setTimeout(function(){sizeCanvas(); refreshRectCache();},80); }
       if(btnFs){ btnFs.addEventListener("click",function(){
         if(document.fullscreenElement){ document.exitFullscreen().catch(function(){}); return; }
         var target=appWrap||document.documentElement;
